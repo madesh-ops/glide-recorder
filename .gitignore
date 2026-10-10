@@ -1,0 +1,6 @@
+/target
+/node_modules
+/ui/dist
+/ui/dev-fixtures
+/src-tauri/gen
+*.partial.mp4

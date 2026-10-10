@@ -1,0 +1,122 @@
+html.recorder-window,
+html.recorder-window body {
+  background: transparent;
+}
+html.recorder-window #root {
+  padding: 6px;
+}
+.recbar {
+  height: 52px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 8px 0 16px;
+  border-radius: 14px;
+  background: rgba(24, 24, 27, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  color: var(--text);
+}
+.rec-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--record);
+  box-shadow: 0 0 0 4px var(--record-soft);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.rec-indicator.paused {
+  background: var(--warning);
+  box-shadow: 0 0 0 4px rgba(242, 181, 68, 0.15);
+  animation: none;
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+.timer {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.15;
+}
+.timer .mono {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.3px;
+}
+.timer .size {
+  font-size: 10.5px;
+}
+.meter {
+  width: 4px;
+  height: 22px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  display: flex;
+  align-items: flex-end;
+  overflow: hidden;
+}
+.meter > div {
+  width: 100%;
+  background: var(--success);
+  transition: height 0.15s;
+}
+.rb-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  display: grid;
+  place-items: center;
+}
+.rb-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+.rb-btn.stop {
+  background: var(--record);
+  color: white;
+}
+.rb-btn.stop:hover {
+  background: #f5626a;
+}
+.countdown {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.count {
+  font: 700 22px var(--font-display);
+  width: 26px;
+  text-align: center;
+  animation: count-in 0.35s cubic-bezier(0.2, 0.9, 0.3, 1.2);
+}
+@keyframes count-in {
+  from {
+    transform: scale(1.6);
+    opacity: 0;
+  }
+}
+.warn {
+  color: var(--warning);
+  display: grid;
+}
+.error-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: 12px;
+}
+.spin {
+  animation: spin 0.9s linear infinite;
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

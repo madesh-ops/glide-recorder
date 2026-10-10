@@ -1,0 +1,20 @@
+[package]
+name = "studio-core"
+description = "Platform-independent engine for Glide, a Windows screen recorder: camera, timeline, project, rendering, export"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+log.workspace = true
+rayon.workspace = true
+png.workspace = true
+uuid.workspace = true
+dirs.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
