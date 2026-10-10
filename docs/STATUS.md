@@ -28,7 +28,8 @@ iGPU, FFmpeg 9.0.2), not just compiled.
   and recovery remuxes the fragmented MP4, repairs WAV headers left
   unfinalized, and replays the cursor log. The dashboard shows a
   Recover / Discard banner for interrupted recordings.
-- **Global shortcuts**: Ctrl+Alt+R stops a recording from anywhere (or opens
+- **Global shortcuts**: Ctrl+Alt+R starts a recording with the last-used source
+  or stops the current one from anywhere (or opens
   New recording) and Ctrl+Alt+P pauses/resumes.
 - **Area recording**: drag-select or pick a preset on a live display
   thumbnail. The region is cropped during GPU readback, and its alignment was

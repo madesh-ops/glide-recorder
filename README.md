@@ -15,7 +15,8 @@ Screen Studio's code, assets, or branding. "Glide" is a working name.
   zoom to a fixed point, restyle the cursor (size, smoothing, idle hiding,
   click ripples), and set the background, padding, corners, shadow, and
   aspect ratio. Undo/redo works throughout, and projects autosave.
-- **Shortcuts that work anywhere**: Ctrl+Alt+R stops a recording, Ctrl+Alt+P
+- **Shortcuts that work anywhere**: Ctrl+Alt+R starts (with your last source)
+  or stops a recording, Ctrl+Alt+P
   pauses or resumes it.
 - **Crash-safe**: if Glide or Windows dies mid-recording, the dashboard
   offers to recover everything captured up to that point.
