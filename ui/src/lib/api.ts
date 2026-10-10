@@ -109,6 +109,7 @@ export interface AppSettings {
   countdownSecs: number;
   hideWindowWhileRecording: boolean;
   defaultZoom: ZoomSettings;
+  lastRecording?: unknown;
 }
 export interface AppInfo { version: string; ffmpeg?: string | null; ffmpegError?: string | null; captureSupported: boolean; outputDir: string }
 export interface EncoderInfo { name: string; label: string; hardware: boolean }

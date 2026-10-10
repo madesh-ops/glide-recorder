@@ -76,6 +76,8 @@ pub fn get_settings(state: State<AppState>) -> AppSettings {
 #[tauri::command]
 pub fn save_settings(app: AppHandle, state: State<AppState>, mut settings: AppSettings) -> CmdResult<AppSettings> {
     settings.sanitize();
+    // Owned by the backend (set when a recording starts); the UI's copy may be stale.
+    settings.last_recording = state.settings.lock().last_recording.clone();
     if let Some(dir) = &settings.output_dir {
         std::fs::create_dir_all(dir).map_err(|e| format!("cannot use {}: {e}", dir.display()))?;
     }
@@ -128,10 +130,10 @@ pub async fn list_audio_devices() -> CmdResult<Vec<AudioDeviceInfo>> {
 // Recording
 // ---------------------------------------------------------------------------
 
-#[derive(Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordRequest {
-    source: SourceSelection,
+    pub source: SourceSelection,
     /// "none", "default" or a device id.
     mic: String,
     system_audio: bool,
@@ -144,9 +146,18 @@ pub struct PendingInfo {
     countdown: u32,
 }
 
+/// Async on purpose: creating a webview window from a synchronous command (which
+/// runs on the main thread) can deadlock on Windows.
 #[tauri::command]
-pub fn prepare_recording(app: AppHandle, state: State<AppState>, request: RecordRequest) -> CmdResult<()> {
-    if state.session.lock().is_some() {
+pub async fn prepare_recording(app: AppHandle, request: RecordRequest) -> CmdResult<()> {
+    use tauri::Manager;
+    prepare(&app, &app.state::<AppState>(), request)
+}
+
+/// Queue a recording and show the countdown bar. Also remembers the request so
+/// the global shortcut can repeat it.
+pub fn prepare(app: &AppHandle, state: &AppState, request: RecordRequest) -> CmdResult<()> {
+    if state.session.lock().is_some() || state.pending.lock().is_some() {
         return Err("a recording is already in progress".into());
     }
     state.ffmpeg()?;
@@ -156,6 +167,13 @@ pub fn prepare_recording(app: AppHandle, state: State<AppState>, request: Record
         "default" => Some(None),
         id => Some(Some(id.to_string())),
     };
+    {
+        let mut s = state.settings.lock();
+        s.last_recording = serde_json::to_value(&request).ok();
+        if let Err(e) = s.save_to(&state.settings_path) {
+            log::warn!("could not remember the recording source: {e}");
+        }
+    }
     let opts = RecordOptions {
         source: request.source,
         fps: request.fps.unwrap_or(settings.fps),
@@ -168,10 +186,25 @@ pub fn prepare_recording(app: AppHandle, state: State<AppState>, request: Record
     };
     *state.pending.lock() = Some(opts);
     if settings.hide_window_while_recording {
-        win::hide_main(&app);
+        win::hide_main(app);
     }
-    win::open_recorder_bar(&app).map_err(err)?;
+    if let Err(e) = win::open_recorder_bar(app) {
+        state.pending.lock().take();
+        win::show_main(app);
+        return Err(err(e));
+    }
     Ok(())
+}
+
+/// The last recording request, if its source still exists.
+pub fn last_request(state: &AppState) -> Option<RecordRequest> {
+    let v = state.settings.lock().last_recording.clone()?;
+    let req: RecordRequest = serde_json::from_value(v).ok()?;
+    let ok = match &req.source {
+        SourceSelection::Display { id } | SourceSelection::Area { id, .. } => find_display(id).is_some(),
+        SourceSelection::Window { id } => list_windows().iter().any(|w| w.id == *id),
+    };
+    ok.then_some(req)
 }
 
 #[tauri::command]

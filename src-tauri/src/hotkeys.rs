@@ -1,6 +1,7 @@
 //! System-wide shortcuts that work while Glide is hidden during recording.
 //!
-//! * Ctrl+Alt+R — stop the current recording, or open "New recording".
+//! * Ctrl+Alt+R — stop the current recording; when idle, start a new one with
+//!   the last-used source and audio settings (or open "New recording").
 //! * Ctrl+Alt+P — pause / resume the current recording.
 
 use crate::state::AppState;
@@ -58,8 +59,19 @@ fn on_record(app: &AppHandle) {
         Some(_) => {} // preparing or finalizing: ignore
         None if state.pending.lock().is_some() => {} // countdown running
         None => {
-            crate::windows::show_main(app);
-            let _ = app.emit("open-new-recording", ());
+            // Off the event-loop thread: creating the recording bar here could deadlock.
+            let app = app.clone();
+            tauri::async_runtime::spawn(async move {
+                let state = app.state::<AppState>();
+                let started = crate::commands::last_request(&state)
+                    .map(|req| crate::commands::prepare(&app, &state, req))
+                    .map(|r| r.map_err(|e| log::warn!("shortcut could not start recording: {e}")).is_ok())
+                    .unwrap_or(false);
+                if !started {
+                    crate::windows::show_main(&app);
+                    let _ = app.emit("open-new-recording", ());
+                }
+            });
         }
     }
 }

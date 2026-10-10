@@ -23,6 +23,9 @@ pub struct AppSettings {
     pub countdown_secs: u32,
     pub hide_window_while_recording: bool,
     pub default_zoom: ZoomSettings,
+    /// The last recording request (source, mic, audio), reused by the
+    /// "start recording" shortcut. Opaque to the core crate.
+    pub last_recording: Option<serde_json::Value>,
 }
 
 impl Default for AppSettings {
@@ -37,6 +40,7 @@ impl Default for AppSettings {
             countdown_secs: 3,
             hide_window_while_recording: true,
             default_zoom: ZoomSettings::default(),
+            last_recording: None,
         }
     }
 }
