@@ -162,10 +162,10 @@ export function RecorderBar() {
             <span className="warn" title={status.warnings.join("\n")}><AlertTriangle size={14} /></span>
           )}
           <div className="spacer" data-tauri-drag-region />
-          <button className="rb-btn" title={paused ? "Resume (Space)" : "Pause (Space)"} onClick={togglePause}>
+          <button className="rb-btn" title={paused ? "Resume (Space · Ctrl+Alt+P)" : "Pause (Space · Ctrl+Alt+P)"} onClick={togglePause}>
             {paused ? <Play size={16} fill="currentColor" /> : <Pause size={16} fill="currentColor" />}
           </button>
-          <button className="rb-btn stop" title="Stop and edit (Enter)" onClick={stop}>
+          <button className="rb-btn stop" title="Stop and edit (Enter · Ctrl+Alt+R from anywhere)" onClick={stop}>
             <Square size={13} fill="currentColor" />
           </button>
           <button className="rb-btn" title="Discard recording" onClick={discard}>

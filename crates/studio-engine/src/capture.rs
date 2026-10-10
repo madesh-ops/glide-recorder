@@ -138,6 +138,18 @@ struct CopyState {
     pool_size: SizeInt32,
     out_w: u32,
     out_h: u32,
+    /// Top-left of the captured region inside the source surface.
+    crop_x: u32,
+    crop_y: u32,
+}
+
+/// A sub-rectangle of the source to record (physical pixels, source-relative).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Crop {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
 }
 
 pub struct Capture {
@@ -178,6 +190,11 @@ impl Capture {
     /// Start capturing `target`. Frames are cropped/padded to the initial size
     /// (rounded down to even dimensions for H.264).
     pub fn start(target: CaptureTarget, slot: Arc<FrameSlot>) -> Result<Capture> {
+        Self::start_cropped(target, slot, None)
+    }
+
+    /// Like [`Capture::start`], recording only `crop` of the source.
+    pub fn start_cropped(target: CaptureTarget, slot: Arc<FrameSlot>, crop: Option<Crop>) -> Result<Capture> {
         if !is_supported() {
             return Err(anyhow!("Windows Graphics Capture is not supported on this system (requires Windows 10 1903+)"));
         }
@@ -193,8 +210,18 @@ impl Capture {
         if size.Width < 2 || size.Height < 2 {
             return Err(anyhow!("the selected source has no visible area"));
         }
-        let out_w = (size.Width as u32) & !1;
-        let out_h = (size.Height as u32) & !1;
+        let (sw, sh) = (size.Width as u32, size.Height as u32);
+        let crop = match crop {
+            Some(c) => {
+                if c.w < 16 || c.h < 16 || c.x.saturating_add(c.w) > sw || c.y.saturating_add(c.h) > sh {
+                    return Err(anyhow!("the selected area ({}×{} at {},{}) is outside the {sw}×{sh} display", c.w, c.h, c.x, c.y));
+                }
+                c
+            }
+            None => Crop { x: 0, y: 0, w: sw, h: sh },
+        };
+        let out_w = crop.w & !1;
+        let out_h = crop.h & !1;
 
         let (device, context) = create_d3d_device()?;
         let dxgi: IDXGIDevice = device.cast()?;
@@ -219,6 +246,8 @@ impl Capture {
             pool_size: size,
             out_w,
             out_h,
+            crop_x: crop.x,
+            crop_y: crop.y,
         }));
         let stopped = Arc::new(AtomicBool::new(false));
         let handler_slot = slot.clone();
@@ -290,12 +319,15 @@ fn on_frame(pool: &Direct3D11CaptureFramePool, state: &Mutex<CopyState>, slot: &
         st.context.CopyResource(&staging, &tex);
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         st.context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))?;
-        let copy_w = (content.Width.max(0) as usize).min(desc.Width as usize).min(out_w);
-        let copy_h = (content.Height.max(0) as usize).min(desc.Height as usize).min(out_h);
+        let (cx, cy) = (st.crop_x as usize, st.crop_y as usize);
+        let avail_w = (content.Width.max(0) as usize).min(desc.Width as usize);
+        let avail_h = (content.Height.max(0) as usize).min(desc.Height as usize);
+        let copy_w = avail_w.saturating_sub(cx).min(out_w);
+        let copy_h = avail_h.saturating_sub(cy).min(out_h);
         let src = mapped.pData as *const u8;
         let pitch = mapped.RowPitch as usize;
         for y in 0..copy_h {
-            let row = std::slice::from_raw_parts(src.add(y * pitch), copy_w * 4);
+            let row = std::slice::from_raw_parts(src.add((y + cy) * pitch + cx * 4), copy_w * 4);
             buf[y * out_w * 4..y * out_w * 4 + copy_w * 4].copy_from_slice(row);
         }
         st.context.Unmap(&staging, 0);

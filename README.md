@@ -5,7 +5,7 @@ re-rendered cursor, and a non-destructive editor. It follows the workflow of
 Screen Studio for macOS. Glide is an independent project that uses none of
 Screen Studio's code, assets, or branding. "Glide" is a working name.
 
-- **Record** a display or a single window (Windows Graphics Capture), plus
+- **Record** a display, a single window or an area (Windows Graphics Capture), plus
   microphone and system audio (WASAPI). The cursor and clicks are recorded as
   metadata, not burned into the video.
 - **Automatic zoom**: clicks are grouped into interactions, and the camera
@@ -15,6 +15,10 @@ Screen Studio's code, assets, or branding. "Glide" is a working name.
   zoom to a fixed point, restyle the cursor (size, smoothing, idle hiding,
   click ripples), and set the background, padding, corners, shadow, and
   aspect ratio. Undo/redo works throughout, and projects autosave.
+- **Shortcuts that work anywhere**: Ctrl+Alt+R stops a recording, Ctrl+Alt+P
+  pauses or resumes it.
+- **Crash-safe**: if Glide or Windows dies mid-recording, the dashboard
+  offers to recover everything captured up to that point.
 - **Export** H.264 MP4 at 720p to 4K and 30/60 fps. Hardware encoding (AMD
   AMF, NVIDIA NVENC, Intel QSV) is used when it actually works, with a
   software fallback. You get a progress bar, can cancel, and every output is

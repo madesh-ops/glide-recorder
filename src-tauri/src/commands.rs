@@ -105,7 +105,7 @@ pub async fn list_sources() -> CmdResult<Sources> {
 pub async fn source_thumbnail(source: SourceSelection, max_width: Option<u32>) -> CmdResult<String> {
     blocking(move || {
         let target = match &source {
-            SourceSelection::Display { id } => {
+            SourceSelection::Display { id } | SourceSelection::Area { id, .. } => {
                 CaptureTarget::Display(find_display(id).ok_or("display not found")?.hmonitor())
             }
             SourceSelection::Window { id } => {
@@ -229,6 +229,11 @@ struct RecordingFinished {
 
 #[tauri::command]
 pub async fn stop_recording(app: AppHandle) -> CmdResult<PathBuf> {
+    finish_recording(app).await
+}
+
+/// Stop, finalize, close the recording bar and open the result in the editor.
+pub async fn finish_recording(app: AppHandle) -> CmdResult<PathBuf> {
     use tauri::Manager;
     let session = current_session(&app.state::<AppState>())?;
     let result = blocking(move || session.stop().map_err(err)).await;
@@ -505,6 +510,46 @@ pub async fn import_video(app: AppHandle, path: String) -> CmdResult<PathBuf> {
     .await?;
     allow_asset_dir(&app, &dir);
     Ok(dir)
+}
+
+// ---------------------------------------------------------------------------
+// Crash recovery
+// ---------------------------------------------------------------------------
+
+/// Interrupted recordings in the recordings folder (excluding a live one).
+#[tauri::command]
+pub async fn list_unfinished(app: AppHandle) -> CmdResult<Vec<studio_engine::recovery::Unfinished>> {
+    use tauri::Manager;
+    let state = app.state::<AppState>();
+    let root = state.settings.lock().output_dir();
+    let active = state.session.lock().as_ref().map(|s| s.dir.clone());
+    blocking(move || Ok(studio_engine::recovery::find_unfinished(&root, active.as_deref()))).await
+}
+
+fn unfinished_dir(app: &AppHandle, dir: &str) -> CmdResult<PathBuf> {
+    use tauri::Manager;
+    let state = app.state::<AppState>();
+    let root = state.settings.lock().output_dir();
+    let p = paths::dunce(PathBuf::from(dir).canonicalize().map_err(err)?);
+    let is_active = state.session.lock().as_ref().is_some_and(|s| paths::is_within(&s.dir, &p) && paths::is_within(&p, &s.dir));
+    if is_active || !paths::is_within(&p, &root) || !p.join(studio_engine::recovery::MANIFEST).is_file() {
+        return Err("not an interrupted recording".into());
+    }
+    Ok(p)
+}
+
+#[tauri::command]
+pub async fn recover_recording(app: AppHandle, dir: String) -> CmdResult<PathBuf> {
+    use tauri::Manager;
+    let dir = unfinished_dir(&app, &dir)?;
+    let ff = app.state::<AppState>().ffmpeg()?;
+    blocking(move || studio_engine::recovery::recover(&ff, &dir).map_err(err)).await
+}
+
+#[tauri::command]
+pub async fn discard_unfinished(app: AppHandle, dir: String) -> CmdResult<()> {
+    let dir = unfinished_dir(&app, &dir)?;
+    blocking(move || recycle(&dir)).await
 }
 
 // ---------------------------------------------------------------------------

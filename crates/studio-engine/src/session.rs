@@ -30,6 +30,8 @@ use windows::Win32::Foundation::HWND;
 pub enum SourceSelection {
     Display { id: String },
     Window { id: u64 },
+    /// A region of a display, in physical pixels relative to the display.
+    Area { id: String, x: u32, y: u32, w: u32, h: u32 },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,7 +145,19 @@ impl RecordingSession {
         let fps = opts.fps.clamp(10, 120);
 
         // Resolve the source.
+        let mut crop = None;
         let (target, area, label, kind, scale) = match &opts.source {
+            SourceSelection::Area { id, x, y, w, h } => {
+                let d = find_display(id).ok_or_else(|| anyhow!("display {id} is no longer connected"))?;
+                crop = Some(crate::capture::Crop { x: *x, y: *y, w: *w, h: *h });
+                (
+                    CaptureTarget::Display(d.hmonitor()),
+                    CaptureArea::Fixed { x: d.x + *x as i32, y: d.y + *y as i32 },
+                    format!("{} — area {w}×{h}", d.name),
+                    SourceKind::Display,
+                    d.scale,
+                )
+            }
             SourceSelection::Display { id } => {
                 let d = find_display(id).ok_or_else(|| anyhow!("display {id} is no longer connected"))?;
                 (CaptureTarget::Display(d.hmonitor()), CaptureArea::Fixed { x: d.x, y: d.y }, d.name.clone(), SourceKind::Display, d.scale)
@@ -170,7 +184,7 @@ impl RecordingSession {
 
         let encoder = choose_encoder(encoders, &opts.encoder)?;
         let slot = Arc::new(FrameSlot::default());
-        let capture = Capture::start(target, slot.clone()).inspect_err(|_| {
+        let capture = Capture::start_cropped(target, slot.clone(), crop).inspect_err(|_| {
             let _ = std::fs::remove_dir_all(&dir);
         })?;
         let (width, height) = (capture.width, capture.height);
@@ -232,6 +246,18 @@ impl RecordingSession {
             created_at: now_ms(),
             zoom: opts.zoom.clone(),
         });
+
+        // Describes the recording so it can be recovered if the app dies before finalizing.
+        let manifest = crate::recovery::RecordingManifest {
+            name: session.name.clone(),
+            created_at: session.created_at,
+            source: session.source.clone(),
+            zoom: session.zoom.clone(),
+            encoder: session.encoder.clone(),
+        };
+        if let Err(e) = write_json_atomic(&dir.join(crate::recovery::MANIFEST), &manifest) {
+            log::warn!("could not write recovery manifest: {e}");
+        }
 
         // Everything is ready: start the clock and all recorders together.
         clock.start();
@@ -435,6 +461,8 @@ impl RecordingSession {
             self.zoom.clone(),
         );
         project.save(&self.dir)?;
+        let _ = std::fs::remove_file(self.dir.join(crate::recovery::MANIFEST));
+        let _ = std::fs::remove_file(self.dir.join(crate::input::CURSOR_LOG));
         log::info!("recording finalized: {} ({duration:.2}s, {frames} frames)", self.dir.display());
         Ok(self.dir.clone())
     }

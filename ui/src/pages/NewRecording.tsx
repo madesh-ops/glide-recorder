@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
-import { AppWindow, Check, Mic, MicOff, Monitor, RefreshCw, Volume2, VolumeX } from "lucide-react";
+import { AppWindow, Check, Mic, MicOff, Monitor, RefreshCw, Scan, Volume2, VolumeX } from "lucide-react";
+import { AreaPicker, centeredArea, type Area } from "./AreaPicker";
 import { api, errorText, type AppInfo, type AppSettings, type AudioDevice, type DisplayInfo, type SourceSelection, type WindowInfo } from "../lib/api";
 import { Segmented } from "../components/controls";
 import { toast } from "../components/toast";
 
-type Kind = "display" | "window";
+type Kind = "display" | "window" | "area";
 
 function keyOf(s: SourceSelection) {
-  return `${s.kind}:${s.id}`;
+  return s.kind === "area" ? `area:${s.id}:${s.x},${s.y},${s.w},${s.h}` : `${s.kind}:${s.id}`;
 }
 
 /** Lazily grabs a still frame for a source card. */
@@ -63,7 +64,9 @@ function SourceCard({
 }
 
 export function NewRecording({ info, onCancel }: { info: AppInfo | null; onCancel: () => void }) {
-  const [kind, setKind] = useState<Kind>("display");
+  const [kind, setKind] = useState<Kind>(() =>
+    import.meta.env.DEV && new URLSearchParams(location.search).get("kind") === "area" ? "area" : "display",
+  );
   const [displays, setDisplays] = useState<DisplayInfo[]>([]);
   const [windows, setWindows] = useState<WindowInfo[]>([]);
   const [devices, setDevices] = useState<AudioDevice[]>([]);
@@ -74,6 +77,8 @@ export function NewRecording({ info, onCancel }: { info: AppInfo | null; onCance
   const [fps, setFps] = useState(60);
   const [starting, setStarting] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [areaDisplay, setAreaDisplay] = useState<string | null>(null);
+  const [area, setArea] = useState<Area | null>(null);
 
   const refresh = () => {
     setLoading(true);
@@ -135,14 +140,42 @@ export function NewRecording({ info, onCancel }: { info: AppInfo | null; onCance
     return () => window.removeEventListener("keydown", onKey);
   });
 
-  const list = useMemo(() => (kind === "display" ? displays : windows), [kind, displays, windows]);
+  const list = useMemo(() => (kind === "window" ? windows : displays), [kind, displays, windows]);
+  const areaDisp = displays.find((d) => d.id === areaDisplay) ?? displays[0];
+
+  const switchKind = (k: Kind) => {
+    setKind(k);
+    if (k === "area" && areaDisp) {
+      const a = area ?? centeredArea(areaDisp, 1280, 720);
+      setAreaDisplay(areaDisp.id);
+      setArea(a);
+      setSelected({ kind: "area", id: areaDisp.id, ...a });
+    } else if (k === "display" && displays[0]) {
+      setSelected({ kind: "display", id: displays[0].id });
+    } else if (k === "window") {
+      setSelected(windows[0] ? { kind: "window", id: windows[0].id } : null);
+    }
+  };
+  // Initialize the area once displays are known (also covers deep links in dev).
+  useEffect(() => {
+    if (kind === "area" && !area && displays.length) switchKind("area");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [kind, displays.length]);
+
+  const updateArea = (a: Area) => {
+    setArea(a);
+    if (areaDisp) setSelected({ kind: "area", id: areaDisp.id, ...a });
+  };
 
   return (
     <div className="page record-page">
       <div className="page-header">
         <div>
           <h1>New recording</h1>
-          <p className="muted">Pick a display or a window. Your cursor is recorded separately, so you can restyle it later.</p>
+          <p className="muted">
+            Pick a display or a window. Your cursor is recorded separately, so you can restyle it later. Press{" "}
+            <span className="kbd">Ctrl+Alt+R</span> anywhere to stop, <span className="kbd">Ctrl+Alt+P</span> to pause.
+          </p>
         </div>
         <div className="spacer" />
         <button className="btn ghost" onClick={refresh} title="Refresh sources">
@@ -151,20 +184,39 @@ export function NewRecording({ info, onCancel }: { info: AppInfo | null; onCance
       </div>
 
       <div className="row" style={{ marginBottom: 16 }}>
-        <div style={{ width: 280 }}>
+        <div style={{ width: 360 }}>
           <Segmented<Kind>
             value={kind}
-            onChange={setKind}
+            onChange={switchKind}
             options={[
               { value: "display", label: <><Monitor size={14} /> Display</> },
               { value: "window", label: <><AppWindow size={14} /> Window</> },
+              { value: "area", label: <><Scan size={14} /> Area</> },
             ]}
           />
         </div>
-        <span className="faint">{list.length} available</span>
+        {kind === "area" && displays.length > 1 ? (
+          <select className="select" value={areaDisp?.id} onChange={(e) => {
+            const d = displays.find((x) => x.id === e.target.value);
+            if (!d) return;
+            setAreaDisplay(d.id);
+            const a = centeredArea(d, 1280, 720);
+            setArea(a);
+            setSelected({ kind: "area", id: d.id, ...a });
+          }}>
+            {displays.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}
+          </select>
+        ) : (
+          <span className="faint">{kind === "area" ? "Record part of a display" : `${list.length} available`}</span>
+        )}
       </div>
 
-      <div className={`source-grid ${kind}`}>
+      {kind === "area" && areaDisp && area && (
+        <div style={{ flex: 1, paddingBottom: 24 }}>
+          <AreaPicker display={areaDisp} area={area} onChange={updateArea} />
+        </div>
+      )}
+      <div className={`source-grid ${kind}`} style={kind === "area" ? { display: "none" } : undefined}>
         {kind === "display" &&
           displays.map((d) => {
             const s: SourceSelection = { kind: "display", id: d.id };

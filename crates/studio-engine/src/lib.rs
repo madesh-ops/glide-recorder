@@ -7,6 +7,7 @@ pub mod audio;
 pub mod capture;
 pub mod clock;
 pub mod input;
+pub mod recovery;
 pub mod session;
 pub mod sources;
 

@@ -20,7 +20,7 @@ choice below was rebuilt from scratch and adapted to Windows conventions.
 | Click a zoom to open its settings (level, auto vs manual) | Selection opens the Zoom panel: level, Follow cursor / Fixed point, focus picker | Done |
 | Right-click a zoom to Disable or Remove it | Context menu: Disable/Enable, Remove | Done |
 | Automatic zooms generated from clicks | `camera::generate_segments`, regenerated on demand, edited zooms kept | Done |
-| Recording bar: Display / Window / Area / Device · camera · mic · system audio · record | New-recording page: Display/Window tabs with live thumbnails, mic picker, system-audio toggle, fps, Start | Partial (no Area, Device, or webcam) |
+| Recording bar: Display / Window / Area / Device · camera · mic · system audio · record | New-recording page: Display/Window tabs with live thumbnails, mic picker, system-audio toggle, fps, Start | Partial (Area works; no Device or webcam) |
 | Countdown and recording controls (pause/resume, stop, restart) | Floating, capture-excluded bar: countdown, timer, size, level meters, pause, stop, discard | Done (no "restart") |
 | Smooth cursor, cursor size, click effects, hide when idle | Cursor panel | Done |
 | Background presets, solid colours, custom image | 12 original gradients, 10 colours plus a picker, image import (converted to PNG) | Done |

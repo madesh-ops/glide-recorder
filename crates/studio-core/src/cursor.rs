@@ -220,6 +220,43 @@ impl CursorPath {
     }
 }
 
+/// One line of the append-only `cursor.log` written while recording. If the
+/// app crashes, the log is replayed to rebuild the cursor track.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "k")]
+pub enum CursorLogEntry {
+    #[serde(rename = "s")]
+    Sample(CursorSample),
+    #[serde(rename = "c")]
+    Click(ClickEvent),
+    #[serde(rename = "u")]
+    ClickUp { button: MouseButton, t: f64 },
+    #[serde(rename = "h")]
+    Shape(CursorShape),
+}
+
+impl CursorTrack {
+    /// Rebuild a track from `cursor.log` lines. Malformed lines (e.g. a line
+    /// cut off by a crash) are skipped.
+    pub fn from_log(text: &str, source_width: u32, source_height: u32) -> Self {
+        let mut t = CursorTrack { version: CURSOR_TRACK_VERSION, source_width, source_height, ..Default::default() };
+        for line in text.lines() {
+            match serde_json::from_str::<CursorLogEntry>(line) {
+                Ok(CursorLogEntry::Sample(s)) => t.samples.push(s),
+                Ok(CursorLogEntry::Click(c)) => t.clicks.push(c),
+                Ok(CursorLogEntry::ClickUp { button, t: up }) => {
+                    if let Some(c) = t.clicks.iter_mut().rev().find(|c| c.button == button && c.up.is_none()) {
+                        c.up = Some(up);
+                    }
+                }
+                Ok(CursorLogEntry::Shape(s)) => t.shapes.push(s),
+                Err(_) => {}
+            }
+        }
+        t
+    }
+}
+
 /// Click ripple progress (0..1) for clicks active at time `t`.
 pub fn active_clicks<'a>(
     clicks: &'a [ClickEvent],
@@ -278,6 +315,26 @@ mod tests {
         assert_eq!(p.sample(0.5).unwrap().opacity, 1.0);
         assert_eq!(p.sample(3.0).unwrap().opacity, 0.0);
         assert_eq!(p.sample(4.2).unwrap().opacity, 1.0);
+    }
+
+    #[test]
+    fn log_replay_rebuilds_track_and_tolerates_truncation() {
+        let entries = [
+            CursorLogEntry::Shape(CursorShape { file: "cursors/cursor_0.png".into(), width: 32, height: 32, hotspot_x: 0, hotspot_y: 0, kind: Some("arrow".into()) }),
+            CursorLogEntry::Sample(sample(0.0, 1.0, 2.0)),
+            CursorLogEntry::Click(ClickEvent { t: 0.5, x: 3.0, y: 4.0, button: MouseButton::Left, up: None }),
+            CursorLogEntry::ClickUp { button: MouseButton::Left, t: 0.6 },
+            CursorLogEntry::Sample(sample(0.7, 5.0, 6.0)),
+        ];
+        let mut text: String = entries.iter().map(|e| serde_json::to_string(e).unwrap() + "
+").collect();
+        text.push_str("{\"k\":\"s\",\"t\":0.8,\"x\":"); // crash mid-line
+        let t = CursorTrack::from_log(&text, 100, 50);
+        assert_eq!(t.samples.len(), 2);
+        assert_eq!(t.clicks.len(), 1);
+        assert_eq!(t.clicks[0].up, Some(0.6));
+        assert_eq!(t.shapes.len(), 1);
+        assert_eq!((t.source_width, t.source_height), (100, 50));
     }
 
     #[test]

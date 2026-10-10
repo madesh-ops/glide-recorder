@@ -60,6 +60,18 @@ mod cli {
             "export" => export_cmd(rest),
             "info" => info(rest),
             "preview-json" => preview_json(rest),
+            "unfinished" => {
+                let root: PathBuf = rest.first().map(PathBuf::from).unwrap_or_else(|| AppSettings::load_from(&AppSettings::config_path().unwrap_or_default()).output_dir());
+                for u in studio_engine::recovery::find_unfinished(&root, None) {
+                    println!("{}  ({}, {:.1} MB)", u.dir.display(), u.name, u.bytes as f64 / 1e6);
+                }
+                Ok(())
+            }
+            "recover" => {
+                let dir = PathBuf::from(rest.first().ok_or_else(|| anyhow!("missing DIR"))?);
+                let out = studio_engine::recovery::recover(&locate_ffmpeg()?, &dir)?;
+                info(&[out.to_string_lossy().into_owned()])
+            }
             _ => {
                 println!("usage: studio-cli probe | record [...] | export PROJECT_DIR [...] | info PROJECT_DIR");
                 Ok(())
@@ -98,6 +110,12 @@ mod cli {
         let settings = AppSettings::load_from(&AppSettings::config_path().unwrap_or_default());
         let source = if let Some(hwnd) = opt::<u64>(args, "--window")? {
             SourceSelection::Window { id: hwnd }
+        } else if let Some(area) = opt::<String>(args, "--area")? {
+            let v: Vec<u32> = area.split(',').map(|n| n.trim().parse()).collect::<Result<_, _>>().map_err(|_| anyhow!("--area expects x,y,w,h"))?;
+            let [x, y, w, h] = v[..] else { bail!("--area expects x,y,w,h") };
+            let idx: usize = opt(args, "--display")?.unwrap_or(0);
+            let d = list_displays().into_iter().nth(idx).ok_or_else(|| anyhow!("no display #{idx}"))?;
+            SourceSelection::Area { id: d.id, x, y, w, h }
         } else {
             let idx: usize = opt(args, "--display")?.unwrap_or(0);
             let d = list_displays().into_iter().nth(idx).ok_or_else(|| anyhow!("no display #{idx}"))?;

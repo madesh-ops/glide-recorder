@@ -115,7 +115,10 @@ export interface EncoderInfo { name: string; label: string; hardware: boolean }
 export interface DisplayInfo { id: string; name: string; x: number; y: number; width: number; height: number; scale: number; primary: boolean }
 export interface WindowInfo { id: number; title: string; app: string; x: number; y: number; width: number; height: number }
 export interface AudioDevice { id: string; name: string; isDefault: boolean }
-export type SourceSelection = { kind: "display"; id: string } | { kind: "window"; id: number };
+export type SourceSelection =
+  | { kind: "display"; id: string }
+  | { kind: "window"; id: number }
+  | { kind: "area"; id: string; x: number; y: number; w: number; h: number };
 export type RecordingState =
   | { state: "idle" } | { state: "preparing" } | { state: "recording" } | { state: "paused" }
   | { state: "finalizing" } | { state: "completed" } | { state: "failed"; message: string };
@@ -132,6 +135,7 @@ export interface SessionStatus {
   needsStop: boolean;
   dir: string;
 }
+export interface Unfinished { dir: string; name: string; createdAt: number; bytes: number }
 export interface ExportProgress { frame: number; totalFrames: number; fps: number; etaSecs: number }
 export interface ExportResult {
   output: string; duration: number; frames: number; width: number; height: number; encoder: string; sizeBytes: number; elapsedSecs: number;
@@ -165,6 +169,9 @@ export const api = {
   deleteProject: (dir: string) => invoke<void>("delete_project", { dir }),
   importVideo: (path: string) => invoke<string>("import_video", { path }),
   setBackgroundImage: (dir: string, path: string) => invoke<string>("set_background_image", { dir, path }),
+  listUnfinished: () => invoke<Unfinished[]>("list_unfinished"),
+  recoverRecording: (dir: string) => invoke<string>("recover_recording", { dir }),
+  discardUnfinished: (dir: string) => invoke<void>("discard_unfinished", { dir }),
   startExport: (dir: string, output: string, settings: ExportSettings) =>
     invoke<string>("start_export", { dir, output, settings }),
   cancelExport: (job: string) => invoke<void>("cancel_export", { job }),

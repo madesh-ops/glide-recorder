@@ -3,6 +3,7 @@
 //! validate input, dispatch to background threads and report results.
 
 mod commands;
+mod hotkeys;
 mod paths;
 mod state;
 mod windows;
@@ -17,6 +18,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(hotkeys::plugin())
         .setup(|app| {
             let state = AppState::load();
             // Recordings folder is readable by the webview (thumbnails, video).
@@ -25,6 +27,7 @@ pub fn run() {
             paths::allow_asset_dir(app.handle(), &root);
             state.probe_in_background();
             app.manage(state);
+            hotkeys::register(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -65,6 +68,9 @@ pub fn run() {
             commands::rename_project,
             commands::delete_project,
             commands::import_video,
+            commands::list_unfinished,
+            commands::recover_recording,
+            commands::discard_unfinished,
             commands::start_export,
             commands::cancel_export,
             commands::set_background_image,

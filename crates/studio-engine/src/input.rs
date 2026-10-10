@@ -21,7 +21,40 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use studio_core::cursor::{ClickEvent, CursorSample, CursorShape, CursorTrack, MouseButton, CURSOR_TRACK_VERSION};
+use std::io::Write;
+use studio_core::cursor::{
+    ClickEvent, CursorLogEntry, CursorSample, CursorShape, CursorTrack, MouseButton, CURSOR_TRACK_VERSION,
+};
+
+/// Append-only log replayed by crash recovery.
+pub const CURSOR_LOG: &str = "cursor.log";
+
+struct CursorLog(Option<std::io::BufWriter<std::fs::File>>);
+
+impl CursorLog {
+    fn open(dir: &Path) -> Self {
+        match std::fs::File::create(dir.join(CURSOR_LOG)) {
+            Ok(f) => Self(Some(std::io::BufWriter::new(f))),
+            Err(e) => {
+                log::warn!("cursor log unavailable (crash recovery will lack cursor data): {e}");
+                Self(None)
+            }
+        }
+    }
+    fn write(&mut self, e: &CursorLogEntry) {
+        if let Some(w) = &mut self.0 {
+            if serde_json::to_writer(&mut *w, e).is_err() || w.write_all(b"
+").is_err() {
+                self.0 = None;
+            }
+        }
+    }
+    fn flush(&mut self) {
+        if let Some(w) = &mut self.0 {
+            let _ = w.flush();
+        }
+    }
+}
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
@@ -221,6 +254,7 @@ fn poll_loop(sh: Arc<Shared>, stop: Arc<AtomicBool>, rx: Receiver<RawButton>, ar
     let mut last: Option<(i32, i32, u32, bool)> = None;
     let mut tick: u64 = 0;
     let mut next = Instant::now();
+    let mut log = CursorLog::open(&dir);
     let margin = 64i32;
     let in_bounds = |x: i32, y: i32| {
         x >= -margin && y >= -margin && x <= sh.width as i32 + margin && y <= sh.height as i32 + margin
@@ -245,9 +279,12 @@ fn poll_loop(sh: Arc<Shared>, stop: Arc<AtomicBool>, rx: Receiver<RawButton>, ar
                 if own_window_at(b.pt) || !in_bounds(x, y) {
                     continue;
                 }
-                sh.clicks.lock().push(ClickEvent { t, x: x as f32, y: y as f32, button: b.button, up: None });
+                let click = ClickEvent { t, x: x as f32, y: y as f32, button: b.button, up: None };
+                log.write(&CursorLogEntry::Click(click));
+                sh.clicks.lock().push(click);
             } else if let Some(c) = sh.clicks.lock().iter_mut().rev().find(|c| c.button == b.button && c.up.is_none()) {
                 c.up = Some(t);
+                log.write(&CursorLogEntry::ClickUp { button: b.button, t });
             }
         }
 
@@ -267,6 +304,7 @@ fn poll_loop(sh: Arc<Shared>, stop: Arc<AtomicBool>, rx: Receiver<RawButton>, ar
                             let next_index = sh.shapes.lock().len();
                             let idx = match extract_cursor(ci.hCursor, &dir, next_index) {
                                 Ok(s) => {
+                                    log.write(&CursorLogEntry::Shape(s.clone()));
                                     let mut v = sh.shapes.lock();
                                     v.push(s);
                                     (v.len() - 1) as u32
@@ -287,11 +325,16 @@ fn poll_loop(sh: Arc<Shared>, stop: Arc<AtomicBool>, rx: Receiver<RawButton>, ar
                 let cur = (x, y, shape, visible);
                 if last != Some(cur) {
                     last = Some(cur);
-                    sh.samples.lock().push(CursorSample { t, x: x as f32, y: y as f32, shape, visible });
+                    let sample = CursorSample { t, x: x as f32, y: y as f32, shape, visible };
+                    log.write(&CursorLogEntry::Sample(sample));
+                    sh.samples.lock().push(sample);
                 }
             }
         }
 
+        if tick % 30 == 0 {
+            log.flush(); // at most ~250 ms of cursor data is lost on a crash
+        }
         next += period;
         let now = Instant::now();
         if next > now {
@@ -300,6 +343,7 @@ fn poll_loop(sh: Arc<Shared>, stop: Arc<AtomicBool>, rx: Receiver<RawButton>, ar
             next = now;
         }
     }
+    log.flush();
 }
 
 fn standard_cursor_kind(h: HCURSOR) -> Option<&'static str> {

@@ -1,16 +1,19 @@
 import { useCallback, useEffect, useState } from "react";
 import { open } from "@tauri-apps/plugin-dialog";
-import { Film, Import, MoreHorizontal, Play, Trash2, FolderOpen, Video } from "lucide-react";
-import { api, errorText, fileUrl, type ProjectSummary } from "../lib/api";
-import { formatDate, formatTime } from "../lib/format";
+import { Film, Import, MoreHorizontal, Play, Trash2, FolderOpen, Video, LifeBuoy } from "lucide-react";
+import { api, errorText, fileUrl, type ProjectSummary, type Unfinished } from "../lib/api";
+import { formatBytes, formatDate, formatTime } from "../lib/format";
 import { toast } from "../components/toast";
 
 export function Projects({ onOpen, onNew }: { onOpen: (dir: string) => void; onNew: () => void }) {
   const [items, setItems] = useState<ProjectSummary[] | null>(null);
   const [importing, setImporting] = useState(false);
   const [menu, setMenu] = useState<{ p: ProjectSummary; x: number; y: number } | null>(null);
+  const [unfinished, setUnfinished] = useState<Unfinished[]>([]);
+  const [recovering, setRecovering] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
+    api.listUnfinished().then(setUnfinished).catch(() => setUnfinished([]));
     api.listProjects().then(setItems).catch((e) => {
       setItems([]);
       toast.error("Could not list projects", errorText(e));
@@ -67,6 +70,29 @@ export function Projects({ onOpen, onNew }: { onOpen: (dir: string) => void; onN
     }
   };
 
+  const recover = async (u: Unfinished) => {
+    setRecovering(u.dir);
+    try {
+      const dir = await api.recoverRecording(u.dir);
+      toast.success("Recording recovered");
+      onOpen(dir);
+    } catch (e) {
+      toast.error("Could not recover the recording", errorText(e));
+      refresh();
+    } finally {
+      setRecovering(null);
+    }
+  };
+
+  const discardUnfinished = async (u: Unfinished) => {
+    try {
+      await api.discardUnfinished(u.dir);
+      refresh();
+    } catch (e) {
+      toast.error("Could not discard", errorText(e));
+    }
+  };
+
   return (
     <div className="page">
       <div className="page-header">
@@ -82,6 +108,22 @@ export function Projects({ onOpen, onNew }: { onOpen: (dir: string) => void; onN
           <Video size={15} /> New recording <span className="kbd" style={{ color: "rgba(255,255,255,.7)", borderColor: "rgba(255,255,255,.3)" }}>Ctrl N</span>
         </button>
       </div>
+
+      {unfinished.map((u) => (
+        <div key={u.dir} className="recover-banner" role="alert">
+          <LifeBuoy size={18} />
+          <div className="col" style={{ gap: 1, flex: 1, minWidth: 0 }}>
+            <strong>“{u.name}” was interrupted before it finished saving</strong>
+            <span className="muted" style={{ fontSize: 12 }}>
+              {formatDate(u.createdAt)} · {formatBytes(u.bytes)} on disk. Glide can rebuild the video, audio and cursor data recorded up to that point.
+            </span>
+          </div>
+          <button className="btn ghost" onClick={() => discardUnfinished(u)} disabled={!!recovering}>Discard</button>
+          <button className="btn primary" onClick={() => recover(u)} disabled={!!recovering}>
+            {recovering === u.dir ? "Recovering…" : "Recover"}
+          </button>
+        </div>
+      ))}
 
       {items === null ? (
         <div className="grid">
@@ -116,7 +158,8 @@ export function Projects({ onOpen, onNew }: { onOpen: (dir: string) => void; onN
               onContextMenu={(e) => setMenu({ p, x: e.clientX, y: e.clientY })}
             >
               <div className="thumb" onClick={() => onOpen(p.dir)}>
-                {p.thumbnail ? <img src={fileUrl(p.thumbnail)} alt="" draggable={false} /> : <Film size={28} className="faint" />}
+                {p.thumbnail && <img src={fileUrl(p.thumbnail)} alt="" draggable={false} onError={(e) => (e.currentTarget.style.display = "none")} />}
+                <Film size={28} className="faint thumb-fallback" />
                 <span className="duration">{formatTime(p.duration)}</span>
                 <span className="play"><Play size={18} fill="currentColor" /></span>
               </div>

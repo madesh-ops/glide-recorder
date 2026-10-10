@@ -34,6 +34,13 @@ export function App() {
     };
   }, []);
 
+  useEffect(() => {
+    const un = on<null>("open-new-recording", () => setRoute((r) => (r.page === "editor" ? r : { page: "home", tab: "record" })));
+    return () => {
+      un.then((f) => f());
+    };
+  }, []);
+
   const openProject = useCallback((dir: string) => setRoute({ page: "editor", dir }), []);
 
   return (

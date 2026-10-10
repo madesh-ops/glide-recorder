@@ -5,7 +5,9 @@
 import { mockIPC, mockWindows } from "@tauri-apps/api/mocks";
 
 export async function installMocks() {
-  const opened = await fetch("/__mock/opened.json").then((r) => r.json());
+  const opened = await fetch("/__mock/opened.json")
+    .then((r) => (r.ok ? r.json() : Promise.reject()))
+    .catch(() => syntheticProject());
   const dir: string = opened.dir;
   const project = opened.project;
   mockWindows("main");
@@ -44,6 +46,10 @@ export async function installMocks() {
         case "get_settings":
         case "save_settings":
           return a.settings ?? settings;
+        case "list_unfinished":
+          return new URLSearchParams(location.search).has("unfinished")
+            ? [{ dir: "C:\Videos\Glide\Recording 2026-10-10 at 12.47.10", name: "Recording 2026-10-10 at 12.47.10", createdAt: Date.now() - 3600e3, bytes: 3.2e6 }]
+            : [];
         case "list_projects":
           return new URLSearchParams(location.search).has("empty") ? [] : projects;
         case "list_sources":
@@ -75,4 +81,33 @@ export async function installMocks() {
     },
     { shouldMockEvents: true },
   );
+}
+
+/** Fallback when no fixtures were generated: a project without media. */
+function syntheticProject() {
+  const zoom = {
+    autoZoom: true, defaultLevel: 2, minLevel: 1.25, maxLevel: 4, transition: 0.8, easing: "ease-in-out-cubic",
+    followSmoothing: 0.45, deadZone: 0.55, mergeGap: 3, leadIn: 0.9, hold: 1.5, minDuration: 2, minGap: 1.5,
+  };
+  const dir = "C:\Videos\Glide\Demo";
+  return {
+    dir,
+    videoPath: dir + "\screen.mp4",
+    hasCursor: true,
+    preview: { layout: { aspect: 16 / 9, screen: { x: 0.08, y: 0.08, w: 0.84, h: 0.84 }, sourceWidth: 1920, sourceHeight: 1080 }, rate: 60, camera: [], cursor: [], clicks: [], shapes: [] },
+    project: {
+      version: 1, id: "demo", name: "Demo", createdAt: Date.now(),
+      source: { kind: "display", label: "Primary Display", width: 1920, height: 1080, fps: 60, scaleFactor: 1 },
+      media: { video: "screen.mp4", thumbnail: null },
+      recording: { duration: 20, framesWritten: 1200, framesDropped: 0, encoder: "h264_amf", pauseCount: 0 },
+      export: { height: 1080, fps: 60, encoder: "auto", quality: "high" },
+      edit: {
+        timeline: { sourceDuration: 20, clips: [{ id: "c1", start: 0, end: 20, speed: 1 }] },
+        zoom: { settings: zoom, segments: [{ id: "z1", start: 3, end: 8, level: 2, focus: { mode: "auto" }, enabled: true, auto: true }] },
+        cursor: { visible: true, scale: 1.5, smoothing: 0.12, hideWhenIdle: 0, clickEffect: true, clickColor: "#FFFFFF", clickSize: 36, clickDuration: 0.45 },
+        style: { aspect: "auto", background: { kind: "gradient", angle: 135, stops: [{ color: "#3B2A8F", at: 0 }, { color: "#7B5CF0", at: 0.55 }, { color: "#C59BF7", at: 1 }] }, padding: 0.08, cornerRadius: 14, shadowOpacity: 0.45, shadowBlur: 60, shadowOffsetY: 18 },
+        audio: { micVolume: 1, systemVolume: 1, micMuted: false, systemMuted: false },
+      },
+    },
+  };
 }

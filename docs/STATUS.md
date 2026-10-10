@@ -18,10 +18,22 @@ iGPU, FFmpeg 9.0.2), not just compiled.
 | Reopen projects without losing editing state | ✅ Tested | `save_and_reload_preserves_edit_state` (exact float round-trip) |
 | MP4 export works reliably | ✅ Tested | H.264 + AAC, validated with ffprobe; cancellation cleans up; AMF and x264 verified |
 | No unbounded memory growth on long recordings | ✅ Verified | 3 min at 1080p60: private memory flat at 41–42 MB, 10,814/10,814 frames |
-| Automated tests for core camera and recording logic | ✅ | 52 unit + 2 integration tests (Rust), 10 tests (UI) |
+| Automated tests for core camera and recording logic | ✅ | 54 unit + 2 integration tests (Rust), 10 tests (UI) |
 | README, build instructions, dependency notices | ✅ | README.md, THIRD_PARTY_NOTICES.md, docs/ |
 
 ## Completed features
+
+- **Crash recovery** (verified by killing the recorder mid-take): a manifest
+  is written at start, cursor data streams to an append-only `cursor.log`,
+  and recovery remuxes the fragmented MP4, repairs WAV headers left
+  unfinalized, and replays the cursor log. The dashboard shows a
+  Recover / Discard banner for interrupted recordings.
+- **Global shortcuts**: Ctrl+Alt+R stops a recording from anywhere (or opens
+  New recording) and Ctrl+Alt+P pauses/resumes.
+- **Area recording**: drag-select or pick a preset on a live display
+  thumbnail. The region is cropped during GPU readback, and its alignment was
+  verified against a cropped full-display recording (43 dB PSNR vs 16 dB
+  for a 2 px offset).
 
 - **Recording engine**: WGC display and window capture with the cursor
   excluded and the capture border disabled where allowed. GPU→CPU readback
@@ -66,12 +78,10 @@ iGPU, FFmpeg 9.0.2), not just compiled.
 
 ## Incomplete or not yet implemented
 
-- Area (region) recording, webcam, and iOS-device recording.
-- Global start/stop hotkey; for now, the floating bar has Space/Enter
-  shortcuts while focused.
-- Crash recovery UI. The fragmented `screen.partial.mp4` survives a crash,
-  but there is no automatic "recover" flow yet, and cursor data is held in
-  memory until stop.
+- Webcam and iOS-device recording.
+- Fullscreen drag-to-select overlay for area recording. Today the area is
+  chosen on a thumbnail inside the main window.
+- Configurable shortcut keys (they are fixed to Ctrl+Alt+R / Ctrl+Alt+P).
 - GPU (wgpu) compositor; export uses the CPU compositor.
 - Motion blur, captions/transcripts, masks, GIF export, presets, command
   menu.
