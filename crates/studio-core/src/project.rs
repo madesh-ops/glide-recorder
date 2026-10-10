@@ -181,10 +181,10 @@ impl Project {
                 style,
                 audio: AudioMix::default(),
             },
+            export: ExportSettings { height: layout.recommended_export_height(), ..ExportSettings::default() },
             source,
             media,
             recording,
-            export: ExportSettings::default(),
         }
     }
 

@@ -12,6 +12,64 @@ use crate::layout::{Background, Layout, Rgba, StyleSettings, REF_HEIGHT};
 use crate::{Error, Result};
 use rayon::prelude::*;
 use std::path::Path;
+use std::sync::Mutex;
+
+/// Catmull-Rom cubic (B = 0, C = 0.5): sharp, no blur at 1:1, mild overshoot.
+#[inline]
+fn catmull_rom(x: f32) -> f32 {
+    let x = x.abs();
+    if x < 1.0 {
+        (1.5 * x - 2.5) * x * x + 1.0
+    } else if x < 2.0 {
+        ((-0.5 * x + 2.5) * x - 4.0) * x + 2.0
+    } else {
+        0.0
+    }
+}
+
+/// Precomputed 1-D resampling taps for the map `src = a * (i + 0.5) + b`
+/// (continuous coordinates, pixel centres at +0.5) over outputs `lo..hi`.
+/// When minifying, the kernel is widened by the scale factor so the result is
+/// properly low-pass filtered (no aliasing / shimmering text).
+struct Taps {
+    lo: usize,
+    n: usize,
+    start: Vec<i64>,
+    weights: Vec<f32>,
+}
+
+impl Taps {
+    fn new(lo: usize, hi: usize, a: f64, b: f64) -> Taps {
+        let stretch = a.abs().max(1.0);
+        let support = 2.0 * stretch;
+        let n = (support * 2.0).ceil() as usize + 1;
+        let count = hi.saturating_sub(lo);
+        let mut start = Vec::with_capacity(count);
+        let mut weights = vec![0f32; count * n];
+        for (k, i) in (lo..hi).enumerate() {
+            let c = a * (i as f64 + 0.5) + b - 0.5; // in source index space
+            let s = (c - support).floor() as i64 + 1;
+            start.push(s);
+            let w = &mut weights[k * n..(k + 1) * n];
+            let mut sum = 0f32;
+            for (t, wt) in w.iter_mut().enumerate() {
+                *wt = catmull_rom((((s + t as i64) as f64 - c) / stretch) as f32);
+                sum += *wt;
+            }
+            if sum.abs() > 1e-6 {
+                w.iter_mut().for_each(|x| *x /= sum);
+            }
+        }
+        Taps { lo, n, start, weights }
+    }
+
+    /// Range of source indices touched (unclamped).
+    fn source_span(&self) -> Option<(i64, i64)> {
+        let first = *self.start.first()?;
+        let last = *self.start.last()? + self.n as i64 - 1;
+        Some((first.min(last), first.max(last)))
+    }
+}
 
 /// Premultiplied RGBA sprite with a hotspot.
 #[derive(Debug, Clone)]
@@ -292,6 +350,8 @@ pub struct Compositor {
     click_color: [f32; 4],
     sprites: Vec<Option<Sprite>>,
     fallback_cursor: Sprite,
+    /// Reused horizontal-pass buffer (RGB f32).
+    scratch: Mutex<Vec<f32>>,
 }
 
 pub struct FrameInput<'a> {
@@ -367,6 +427,7 @@ impl Compositor {
             click_color: parse_color(&cursor.click_color),
             sprites,
             fallback_cursor: Sprite::default_arrow(),
+            scratch: Mutex::new(Vec::new()),
         }
     }
 
@@ -393,36 +454,108 @@ impl Compositor {
         let rc = r.center();
         let (hw, hh) = (r.w / 2.0, r.h / 2.0);
         let (sx, sy) = (input.src_w as f64 / r.w, input.src_h as f64 / r.h);
+        let (src_w, src_h) = (input.src_w as usize, input.src_h as usize);
 
+        // Output pixel -> source pixel is a separable affine map per axis:
+        //   src_x = ax * (x + 0.5) + bx,   src_y = ay * (y + 0.5) + by
+        let ax = sx / z;
+        let bx = (cx - w as f64 / (2.0 * z) - r.x) * sx;
+        let ay = sy / z;
+        let by = (cy - h as f64 / (2.0 * z) - r.y) * sy;
+        // Output region covered by the recording (+1 px for the anti-aliased edge).
+        let to_out_x = |qx: f64| (qx - cx) * z + w as f64 / 2.0;
+        let to_out_y = |qy: f64| (qy - cy) * z + h as f64 / 2.0;
+        let x_lo = (to_out_x(r.x).floor() as i64 - 1).clamp(0, w as i64) as usize;
+        let x_hi = (to_out_x(r.right()).ceil() as i64 + 1).clamp(0, w as i64) as usize;
+        let y_lo = (to_out_y(r.y).floor() as i64 - 1).clamp(0, h as i64) as usize;
+        let y_hi = (to_out_y(r.bottom()).ceil() as i64 + 1).clamp(0, h as i64) as usize;
+        let tx = Taps::new(x_lo, x_hi, ax, bx);
+        let ty = Taps::new(y_lo, y_hi, ay, by);
+        let cols = x_hi.saturating_sub(x_lo);
+
+        // Pass 1: horizontal filter of every source row the vertical pass needs.
+        let (row_lo, row_hi) = ty
+            .source_span()
+            .map(|(a, b)| (a.clamp(0, src_h as i64 - 1) as usize, b.clamp(0, src_h as i64 - 1) as usize))
+            .unwrap_or((0, 0));
+        let rows = if cols > 0 && y_hi > y_lo { row_hi - row_lo + 1 } else { 0 };
+        let mut scratch = self.scratch.lock().unwrap_or_else(|e| e.into_inner());
+        scratch.resize(rows * cols * 3, 0.0);
+        let src = input.src;
+        scratch.par_chunks_mut((cols * 3).max(1)).take(rows).enumerate().for_each(|(ri, hrow)| {
+            let row_base = (row_lo + ri) * src_w * 4;
+            for c in 0..cols {
+                let s0 = tx.start[c];
+                let wts = &tx.weights[c * tx.n..(c + 1) * tx.n];
+                let (mut r_, mut g_, mut b_) = (0f32, 0f32, 0f32);
+                for (t, &wt) in wts.iter().enumerate() {
+                    let sxi = (s0 + t as i64).clamp(0, src_w as i64 - 1) as usize;
+                    let i = row_base + sxi * 4;
+                    r_ += wt * src[i] as f32;
+                    g_ += wt * src[i + 1] as f32;
+                    b_ += wt * src[i + 2] as f32;
+                }
+                hrow[c * 3] = r_;
+                hrow[c * 3 + 1] = g_;
+                hrow[c * 3 + 2] = b_;
+            }
+        });
+        let hbuf: &[f32] = &scratch;
+
+        // Pass 2: vertical filter + compositing with the backdrop and rounded mask.
         out.par_chunks_mut(w * 4).enumerate().for_each(|(y, row)| {
             let qy = cy + (y as f64 + 0.5 - h as f64 / 2.0) / z;
+            let mut vrow: Vec<f32> = Vec::new();
+            if rows > 0 && y >= y_lo && y < y_hi {
+                let k = y - ty.lo;
+                let s0 = ty.start[k];
+                let wts = &ty.weights[k * ty.n..(k + 1) * ty.n];
+                vrow.resize(cols * 3, 0.0);
+                for (t, &wt) in wts.iter().enumerate() {
+                    if wt == 0.0 {
+                        continue;
+                    }
+                    let sr = ((s0 + t as i64).clamp(0, src_h as i64 - 1) as usize).clamp(row_lo, row_hi) - row_lo;
+                    let hr = &hbuf[sr * cols * 3..(sr + 1) * cols * 3];
+                    for (v, &hv) in vrow.iter_mut().zip(hr) {
+                        *v += wt * hv;
+                    }
+                }
+            }
             for x in 0..w {
                 let qx = cx + (x as f64 + 0.5 - w as f64 / 2.0) / z;
                 let d = sd_round_rect(qx - rc.x, qy - rc.y, hw, hh, self.radius_px);
                 // Anti-aliased edge one output pixel wide.
                 let cover = (0.5 - d * z).clamp(0.0, 1.0) as f32;
+                let video = |x: usize| -> [f32; 3] {
+                    if vrow.is_empty() || x < x_lo || x >= x_hi {
+                        return [0.0; 3];
+                    }
+                    let i = (x - x_lo) * 3;
+                    [vrow[i], vrow[i + 1], vrow[i + 2]]
+                };
                 let px = if cover >= 1.0 {
-                    sample_bilinear(input.src, input.src_w, input.src_h, (qx - r.x) * sx, (qy - r.y) * sy)
+                    video(x)
                 } else {
                     let bg = sample_bilinear(&self.backdrop, self.out_w, self.out_h, qx, qy);
                     if cover <= 0.0 {
-                        bg
+                        [bg[0], bg[1], bg[2]]
                     } else {
-                        let v = sample_bilinear(input.src, input.src_w, input.src_h, (qx - r.x) * sx, (qy - r.y) * sy);
+                        let v = video(x);
                         [
                             v[0] * cover + bg[0] * (1.0 - cover),
                             v[1] * cover + bg[1] * (1.0 - cover),
                             v[2] * cover + bg[2] * (1.0 - cover),
-                            255.0,
                         ]
                     }
                 };
-                row[x * 4] = px[0] as u8;
-                row[x * 4 + 1] = px[1] as u8;
-                row[x * 4 + 2] = px[2] as u8;
+                row[x * 4] = (px[0] + 0.5).clamp(0.0, 255.0) as u8;
+                row[x * 4 + 1] = (px[1] + 0.5).clamp(0.0, 255.0) as u8;
+                row[x * 4 + 2] = (px[2] + 0.5).clamp(0.0, 255.0) as u8;
                 row[x * 4 + 3] = 255;
             }
         });
+        drop(scratch);
 
         // Scale from source pixels to output pixels at the current zoom.
         let src_to_out = r.w / input.src_w as f64 * z;

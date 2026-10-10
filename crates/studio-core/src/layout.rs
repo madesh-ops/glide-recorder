@@ -192,6 +192,21 @@ impl Layout {
         Vec2::new(self.screen.x + p.x * self.screen.w, self.screen.y + p.y * self.screen.h)
     }
 
+    /// Output height at which the recording is shown at (at least) its native
+    /// pixel size, i.e. text is not scaled down by the padding.
+    pub fn native_height(&self) -> f64 {
+        let by_h = self.source_height / self.screen.h;
+        let by_w = self.source_width / (self.screen.w * self.aspect);
+        by_h.max(by_w)
+    }
+
+    /// Smallest standard export height (720/1080/1440/2160) that keeps the
+    /// recording pixel-sharp; 2160 if even that downsamples.
+    pub fn recommended_export_height(&self) -> u32 {
+        let need = self.native_height() * 0.97; // a 3 % shrink is imperceptible
+        [720u32, 1080, 1440, 2160].into_iter().find(|&h| h as f64 >= need).unwrap_or(2160)
+    }
+
     /// Output pixel size for a given output height (both even, for yuv420p).
     pub fn output_size(&self, height: u32) -> (u32, u32) {
         let h = (height.max(2) / 2) * 2;
@@ -234,6 +249,22 @@ mod tests {
         assert!((l.screen.w - 1.0).abs() < 1e-9 && (l.screen.h - 1.0).abs() < 1e-9);
         let p = l.source_to_canvas(Vec2::new(640.0, 360.0));
         assert!((p.x - 0.5).abs() < 1e-9 && (p.y - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn recommended_height_keeps_text_native() {
+        // 1080p with 8 % padding needs ~1286 px -> 1440p.
+        let l = Layout::compute(1920, 1080, &StyleSettings { padding: 0.08, ..Default::default() });
+        assert_eq!(l.recommended_export_height(), 1440);
+        // No padding: 1080p is already 1:1.
+        let l = Layout::compute(1920, 1080, &StyleSettings { padding: 0.0, ..Default::default() });
+        assert_eq!(l.recommended_export_height(), 1080);
+        // 1366x768 laptop with padding fits in 1080p.
+        let l = Layout::compute(1366, 768, &StyleSettings { padding: 0.08, ..Default::default() });
+        assert_eq!(l.recommended_export_height(), 1080);
+        // 4K source caps at 2160.
+        let l = Layout::compute(3840, 2160, &StyleSettings::default());
+        assert_eq!(l.recommended_export_height(), 2160);
     }
 
     #[test]

@@ -59,6 +59,11 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
     return `${w} × ${h}`;
   }, [settings.height, aspect]);
   const duration = outputDuration(timeline);
+  // Height at which the recording is shown at native size (mirrors Layout::native_height).
+  const nativeHeight = preview
+    ? Math.max(preview.layout.sourceHeight / preview.layout.screen.h, preview.layout.sourceWidth / (preview.layout.screen.w * preview.layout.aspect))
+    : 0;
+  const textScale = nativeHeight ? Math.min(1, settings.height / nativeHeight) : 1;
 
   const browse = async () => {
     const p = await save({ defaultPath: output, filters: [{ name: "MP4 video", extensions: ["mp4"] }] });
@@ -101,6 +106,12 @@ export function ExportDialog({ onClose }: { onClose: () => void }) {
                   { value: 2160, label: "4K" },
                 ]}
               />
+              {textScale < 0.97 && (
+                <span className="faint" style={{ fontSize: 12 }}>
+                  Your recording is shown at {Math.round(textScale * 100)}% of its size at this resolution, so small text gets
+                  softer. {nativeHeight <= 2160 * 1.03 ? `Choose ${[1080, 1440, 2160].find((h) => h >= nativeHeight * 0.97)}p or higher for pixel-sharp text.` : "Choose 4K for the sharpest result."}
+                </span>
+              )}
             </div>
             <div className="row" style={{ gap: 14 }}>
               <div className="field" style={{ flex: 1 }}>

@@ -204,56 +204,84 @@ pub fn raw_input_args(spec: &VideoEncodeSpec) -> Vec<String> {
     ]
 }
 
+/// High-quality RGB -> YUV conversion: Lanczos chroma downsampling with full
+/// chroma interpolation and accurate rounding (default swscale settings blur
+/// coloured text edges more).
+pub const SWS_HQ_FLAGS: &str = "lanczos+accurate_rnd+full_chroma_int";
+
+/// Pixel rate (pixels per second) up to which the slower, higher-quality
+/// hardware presets keep up in real time (≈1080p60 with 2× headroom measured on
+/// an integrated Radeon GPU).
+const RT_QUALITY_PIXEL_RATE: f64 = 1920.0 * 1080.0 * 60.0 * 1.05;
+
+/// Encoder quantizers. Screen content (text, flat UI) needs much lower QP than
+/// camera footage to stay crisp; static frames cost almost nothing either way.
+/// Measured on a synthetic screen-text clip (see docs/QUALITY.md).
+struct Ladder {
+    /// x264 CRF.
+    crf: u32,
+    /// Constant QP / CQ for hardware encoders.
+    qp: u32,
+    /// Bits per pixel for bitrate-only encoders (Media Foundation).
+    bpp: f64,
+}
+
+fn ladder(spec: &VideoEncodeSpec) -> Ladder {
+    if spec.realtime {
+        // Recording is the master copy and will be re-encoded on export.
+        return Ladder { crf: 16, qp: 16, bpp: 0.15 };
+    }
+    match spec.quality {
+        Quality::Low => Ladder { crf: 23, qp: 24, bpp: 0.06 },
+        Quality::High => Ladder { crf: 17, qp: 18, bpp: 0.12 },
+        Quality::Best => Ladder { crf: 14, qp: 15, bpp: 0.2 },
+    }
+}
+
 /// Video codec arguments (conversion to BT.709 limited-range 4:2:0 + encoder settings).
 pub fn video_codec_args(spec: &VideoEncodeSpec) -> Vec<String> {
-    let q_x264 = match spec.quality {
-        Quality::Low => 28,
-        Quality::High => 21,
-        Quality::Best => 17,
-    };
-    let q_hw = match spec.quality {
-        Quality::Low => 30,
-        Quality::High => 22,
-        Quality::Best => 18,
-    };
+    let l = ladder(spec);
+    let pixel_rate = spec.width as f64 * spec.height as f64 * spec.fps as f64;
+    let heavy = pixel_rate > RT_QUALITY_PIXEL_RATE;
     let mut a: Vec<String> = vec![
         "-vf".into(),
-        format!("scale=out_color_matrix=bt709:out_range=tv,format={}", pix_fmt_for(&spec.encoder)),
+        format!("scale=out_color_matrix=bt709:out_range=tv:flags={SWS_HQ_FLAGS},format={}", pix_fmt_for(&spec.encoder)),
         "-c:v".into(),
         spec.encoder.clone(),
     ];
     let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
     match spec.encoder.as_str() {
         "libx264" => {
-            a.extend(s(&["-preset", if spec.realtime { "superfast" } else { "medium" }]));
-            a.extend(s(&["-crf", &q_x264.to_string()]));
+            let preset = match (spec.realtime, heavy, spec.quality) {
+                (true, true, _) => "superfast",
+                (true, false, _) => "veryfast",
+                (false, _, Quality::Low) => "medium",
+                (false, _, _) => "slow",
+            };
+            a.extend(s(&["-preset", preset, "-crf", &l.crf.to_string()]));
             if spec.realtime {
+                // Also measurably sharper on static text than mb-tree lookahead.
                 a.extend(s(&["-tune", "zerolatency"]));
             }
         }
         "h264_amf" => {
-            a.extend(s(&["-usage", if spec.realtime { "lowlatency" } else { "transcoding" }]));
-            a.extend(s(&["-quality", if spec.realtime { "speed" } else { "quality" }]));
-            let q = q_hw.to_string();
+            let (usage, quality) = if spec.realtime && heavy { ("lowlatency", "speed") } else { ("transcoding", "quality") };
+            a.extend(s(&["-usage", usage, "-quality", quality]));
+            let q = l.qp.to_string();
             a.extend(s(&["-rc", "cqp", "-qp_i", &q, "-qp_p", &q, "-qp_b", &q]));
         }
         "h264_nvenc" => {
-            a.extend(s(&["-preset", if spec.realtime { "p2" } else { "p5" }]));
-            a.extend(s(&["-rc", "vbr", "-cq", &q_hw.to_string(), "-b:v", "0"]));
+            let preset = if spec.realtime { if heavy { "p2" } else { "p4" } } else { "p6" };
+            a.extend(s(&["-preset", preset, "-rc", "vbr", "-cq", &l.qp.to_string(), "-b:v", "0"]));
         }
         "h264_qsv" => {
-            a.extend(s(&["-preset", if spec.realtime { "veryfast" } else { "medium" }]));
-            a.extend(s(&["-global_quality", &q_hw.to_string()]));
+            let preset = if spec.realtime { if heavy { "veryfast" } else { "faster" } } else { "slow" };
+            a.extend(s(&["-preset", preset, "-global_quality", &l.qp.to_string()]));
         }
         _ => {
             // h264_mf and unknown encoders: bitrate-based.
-            let bpp = match spec.quality {
-                Quality::Low => 0.05,
-                Quality::High => 0.1,
-                Quality::Best => 0.16,
-            };
-            let bitrate = (spec.width as f64 * spec.height as f64 * spec.fps as f64 * bpp) as u64;
-            a.extend(s(&["-b:v", &bitrate.max(1_000_000).to_string()]));
+            let bitrate = (pixel_rate * l.bpp) as u64;
+            a.extend(s(&["-b:v", &bitrate.max(2_000_000).to_string()]));
             if spec.encoder == "h264_mf" {
                 a.extend(s(&["-rate_control", "u_vbr", "-scenario", "display_remoting"]));
             }
@@ -383,7 +411,7 @@ impl FfmpegReader {
             .args(["-hide_banner", "-loglevel", "error", "-nostats", "-i"])
             .arg(input)
             .args(["-map", "0:v:0", "-f", "rawvideo", "-pix_fmt", "rgba", "-fps_mode", "passthrough"])
-            .args(["-vf", &format!("scale={width}:{height}:in_color_matrix=bt709:in_range=tv")])
+            .args(["-vf", &format!("scale={width}:{height}:in_color_matrix=bt709:in_range=tv:flags={SWS_HQ_FLAGS}")])
             .arg("pipe:1")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -572,7 +600,28 @@ mod tests {
         let joined = a.join(" ");
         assert!(joined.contains("-c:v libx264"));
         assert!(joined.contains("format=yuv420p"));
+        assert!(joined.contains("-crf 16"), "recording uses the master-quality ladder");
+        assert!(joined.contains(SWS_HQ_FLAGS));
         assert!(joined.contains("-g 60"));
         assert!(joined.contains("-colorspace bt709"));
+    }
+
+    #[test]
+    fn heavy_pixel_rates_use_fast_presets_and_exports_use_slow_ones() {
+        let base = VideoEncodeSpec {
+            width: 3840,
+            height: 2160,
+            fps: 60,
+            input_pix_fmt: "bgra",
+            encoder: "h264_amf".into(),
+            quality: Quality::High,
+            realtime: true,
+        };
+        let rec4k = video_codec_args(&base).join(" ");
+        assert!(rec4k.contains("-quality speed"), "{rec4k}");
+        let rec1080 = video_codec_args(&VideoEncodeSpec { width: 1920, height: 1080, ..base.clone() }).join(" ");
+        assert!(rec1080.contains("-quality quality") && rec1080.contains("-qp_i 16"), "{rec1080}");
+        let export = video_codec_args(&VideoEncodeSpec { realtime: false, encoder: "libx264".into(), ..base }).join(" ");
+        assert!(export.contains("-preset slow") && export.contains("-crf 17"), "{export}");
     }
 }
