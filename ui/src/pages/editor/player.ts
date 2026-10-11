@@ -9,6 +9,8 @@ class Player {
   audios: { el: HTMLAudioElement; track: "mic" | "system" }[] = [];
   /** Source time requested by the last seek (shown until the video catches up). */
   pendingSeek: number | null = null;
+  /** Smoothed playback clock for drawing (see frameTime). */
+  private clock: { t: number; wall: number } | null = null;
 
   attach(video: HTMLVideoElement | null) {
     this.video = video;
@@ -32,6 +34,31 @@ class Player {
 
   get time(): number {
     return this.pendingSeek ?? this.video?.currentTime ?? 0;
+  }
+
+  /**
+   * Playback time to draw at animation frame `now` (ms). `video.currentTime`
+   * advances in uneven steps (it follows decoder and audio clock updates, not
+   * the display), which makes camera pans judder even though the path itself is
+   * smooth. Extrapolate from the frame timestamp instead and ease towards the
+   * media clock; resync after seeks, stalls and pauses.
+   */
+  frameTime(now: number): number {
+    const v = this.video;
+    if (!v || this.pendingSeek !== null || v.paused || v.readyState < HTMLMediaElement.HAVE_FUTURE_DATA) {
+      this.clock = null;
+      return this.time;
+    }
+    const media = v.currentTime;
+    let t = media;
+    if (this.clock) {
+      const predicted = this.clock.t + ((now - this.clock.wall) / 1000) * v.playbackRate;
+      const err = media - predicted;
+      // A big disagreement means a jump (clip boundary, stall): follow the video.
+      if (Math.abs(err) < 0.1) t = predicted + err * 0.08;
+    }
+    this.clock = { t, wall: now };
+    return t;
   }
 
   seek(sourceT: number) {

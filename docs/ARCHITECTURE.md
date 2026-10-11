@@ -109,17 +109,34 @@ so preview and export at any resolution use the same trajectory.
    in-out by default, configurable), holds, and eases out. Overlapping
    contributions take the max, so it is continuous.
 6. **Focus**: auto segments follow the cursor using a *dead-zone* (the camera
-   only moves when the cursor leaves the inner 60 % of the viewport) and a
-   critically-damped spring (`smooth_damp`); manual segments target a fixed point.
+   only moves when the cursor leaves the inner 55 % of the viewport); manual
+   segments target a fixed point. The cursor is low-passed (0.12 s) before the
+   dead zone, so sensor jitter and the small corrective movements people make
+   when landing on a target don't nudge the camera after the main movement.
+   The camera then follows its target through three critically damped springs
+   in series (`SmoothFollow`, a 6th-order critically damped filter, total lag
+   `follow_smoothing`). This gives continuous acceleration and jerk, a
+   near-symmetric bell-shaped velocity profile (gentle start, natural
+   deceleration), and monotonic motion with no overshoot or bounce. Each step
+   is solved exactly for a target ramping linearly across the step
+   (`smooth_damp_ramp`), so the 60 Hz preview and 120 Hz export trace the same
+   path. Once the remaining motion is below ~0.01 output px, the camera comes
+   to rest *exactly*, with no endless sub-pixel creep that would shimmer
+   through the resampler.
 7. **Bounds**: the visible window (1/zoom of the canvas) is clamped inside a
    region that blends from the full canvas (zoom 1) to the screen rectangle
    (once the viewport fits inside it), so content is never stretched, the
    background never shows at high zoom, and zoom-out returns to centre smoothly.
-8. The trajectory is simulated at 120 Hz once and cached as keyframes
-   `(t, cx, cy, zoom)`; preview and export sample it with linear interpolation.
+8. The trajectory is simulated once (60 Hz for the preview, 120 Hz for
+   export) and cached as keyframes `(t, cx, cy, zoom)`, sampled with linear
+   interpolation. The preview draws at a smoothed playback clock rather than the
+   raw `video.currentTime`, which advances in uneven steps.
 
 Tests cover segment generation, merging, bounds, continuity (bounded velocity and
-acceleration → no jitter), determinism and the disabled case.
+acceleration → no jitter), smooth deceleration and exact settling for left↔right
+pans, preview/export agreement, determinism and the disabled case.
+`cargo run --release -p studio-core --example camera_motion` prints pan metrics
+(see `docs/QUALITY.md`).
 
 ## Rendering
 

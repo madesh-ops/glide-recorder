@@ -2,7 +2,7 @@
 //! applied at edit time. The cursor is never burned into `screen.mp4`, so all
 //! of this stays adjustable.
 
-use crate::easing::smooth_damp;
+use crate::easing::Spring;
 use crate::geometry::Vec2;
 use crate::layout::finite_or;
 use serde::{Deserialize, Serialize};
@@ -170,8 +170,7 @@ impl CursorPath {
         let n = (duration * rate).ceil() as usize + 1;
         frames.reserve(n);
         let (first, _) = track.raw_at(0.0).unwrap();
-        let (mut x, mut y) = (first.x, first.y);
-        let (mut vx, mut vy) = (0.0, 0.0);
+        let (mut sx, mut sy) = (Spring::at(first.x), Spring::at(first.y));
         let mut last_raw = first;
         let mut last_move_t = 0.0f64;
         for i in 0..n {
@@ -181,13 +180,11 @@ impl CursorPath {
                 last_move_t = t;
                 last_raw = raw;
             }
-            if i == 0 || settings.smoothing <= 0.0 {
-                x = raw.x;
-                y = raw.y;
+            let (x, y) = if i == 0 {
+                (raw.x, raw.y)
             } else {
-                x = smooth_damp(x, raw.x, &mut vx, settings.smoothing, dt);
-                y = smooth_damp(y, raw.y, &mut vy, settings.smoothing, dt);
-            }
+                (sx.step(raw.x, settings.smoothing, dt), sy.step(raw.y, settings.smoothing, dt))
+            };
             let mut opacity = if sample.visible { 1.0 } else { 0.0 };
             if settings.hide_when_idle > 0.0 {
                 let idle = t - last_move_t - settings.hide_when_idle;

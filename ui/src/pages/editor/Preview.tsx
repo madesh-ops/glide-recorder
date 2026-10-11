@@ -70,14 +70,14 @@ export function Preview() {
   latest.current = { preview, box };
   useEffect(() => {
     let raf = 0;
-    const frame = () => {
+    const frame = (now: number) => {
       raf = requestAnimationFrame(frame);
       player.tick();
       const { preview: p, box: b } = latest.current;
       const st = useEditor.getState();
       const edit = st.edit;
       if (!p || !edit || !b.w || !sceneRef.current) return;
-      const t = st.playing ? player.time : st.time;
+      const t = st.playing ? player.frameTime(now) : st.time;
       const cam = sampleCamera(p, t);
       sceneRef.current.style.transform = sceneTransform(cam, b.w, b.h);
 

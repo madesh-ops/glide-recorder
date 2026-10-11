@@ -9,8 +9,9 @@ Screen Studio's code, assets, or branding. "Glide" is a working name.
   microphone and system audio (WASAPI). The cursor and clicks are recorded as
   metadata, not burned into the video.
 - **Automatic zoom**: clicks are grouped into interactions, and the camera
-  eases in, follows the cursor with a dead zone and critically damped
-  smoothing, then eases back out. Every zoom is editable on the timeline.
+  eases in, follows the cursor with a dead zone and smooth, overshoot-free
+  camera motion that decelerates naturally and settles exactly, then eases
+  back out. Every zoom is editable on the timeline.
 - **Edit**: trim, cut, change clip speed, add, move, or resize zooms, pin a
   zoom to a fixed point, restyle the cursor (size, smoothing, idle hiding,
   click ripples), and set the background, padding, corners, shadow, and

@@ -80,6 +80,52 @@ sharpness figure for those.
 A live 1080p60 desktop recording with the new settings kept 0 ms encoder
 lag (610/610 frames in 10.17 s) at about 7 Mbit/s.
 
+## Camera motion
+
+The follow had a "rough, jerky" arrival when panning left or right. `cargo run
+--release -p studio-core --example camera_motion` simulates a 2× zoomed pan
+with human-like strokes. Each stroke is a minimum-jerk reach that overshoots by
+4 % and is followed by a corrective sub-movement, with ±1 px jitter at 125 Hz.
+Motion is measured in output pixels of a 1440p export.
+
+| Metric (left→right / right→left) | Before | After |
+|---|---|---|
+| Peak jerk (px/s³) | 151 k / 151 k | 104 k / 109 k |
+| Time to rest after the cursor stops | 1.92 s / 1.91 s | **1.30 s / 1.28 s** |
+| Sub-pixel crawl (0.01–0.5 px/frame) | 0.99 s / 0.99 s | 0.42 s / 0.43 s |
+| Final step into rest | exponential, never exactly 0 | 0.01 px, then exactly still |
+| Direction reversals | 0 | 0 |
+| Preview (60 Hz) vs export (120 Hz) path | ≈ 1 frame apart (58 px mid-pan) | < 2 px |
+
+Causes and changes:
+
+1. **Single spring, exponential tail.** One critically damped spring makes
+   a lopsided velocity curve: a quick kick, then a long creeping tail. The
+   camera crawled for about a second at sub-pixel speeds, which shimmers text
+   through the resampler and reads as "not quite stopping". It now uses three
+   springs in series with the same total lag. The velocity curve is a
+   near-symmetric bell (close to minimum-jerk), acceleration and jerk are
+   continuous, and motion is monotonic with no overshoot.
+2. **No defined rest.** A rest threshold (≈0.01 output px) stops the camera
+   exactly. The final step is invisible.
+3. **Overshoot clamp.** The old `smooth_damp` zeroed velocity whenever a step
+   would pass the target, which was a hard stop. It is now the exact analytic
+   solution, with velocity always continuous.
+4. **Raw cursor into the dead zone.** Jitter and the small corrections at the
+   end of a reach moved the target in late little nudges. The cursor is now
+   low-passed (0.12 s) before the dead zone.
+5. **Rate dependence.** Holding a moving target for each step leads by half a
+   step per filter stage, so the 60 Hz preview ran a frame ahead of the
+   export. Each stage is now solved exactly for a linearly ramping target. The
+   displayed cursor uses the same spring.
+6. **Preview clock.** The editor drew at `video.currentTime`, which advances
+   in uneven steps. It now draws at a smoothed clock that extrapolates from
+   the frame timestamp and eases towards the media clock.
+
+Peak speed rises (2.7 → 3.6 k px/s) because the same distance is covered in
+a more compact, symmetric curve instead of a long tail. Raise
+**Follow smoothness** in the zoom panel for slower, softer pans.
+
 ## Limits and trade-offs
 
 - **4:2:0 chroma.** H.264 as played by browsers and most players stores

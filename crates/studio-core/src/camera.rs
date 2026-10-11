@@ -5,7 +5,7 @@
 //! whole composed scene. See `docs/ARCHITECTURE.md` for the algorithm overview.
 
 use crate::cursor::{ClickEvent, CursorTrack, MouseButton};
-use crate::easing::{smooth_damp, smoothstep, Easing};
+use crate::easing::{smoothstep, Easing, SmoothFollow, Spring};
 use crate::geometry::{Rect, Vec2};
 use crate::layout::{finite_or, Layout};
 use serde::{Deserialize, Serialize};
@@ -22,7 +22,7 @@ pub struct ZoomSettings {
     /// Zoom in/out animation duration in seconds.
     pub transition: f64,
     pub easing: Easing,
-    /// Camera follow time constant in seconds (critically damped spring).
+    /// Camera follow lag in seconds (6th-order critically damped filter).
     pub follow_smoothing: f64,
     /// Fraction of the visible window the cursor may move in before the camera pans.
     pub dead_zone: f64,
@@ -116,6 +116,16 @@ pub fn new_segment_id() -> String {
 
 const DOUBLE_CLICK_TIME: f64 = 0.35;
 const DOUBLE_CLICK_DIST: f64 = 12.0;
+/// Smoothing of the cursor before it drives the camera (seconds). Filters out
+/// sensor jitter and the small corrective movements people make when landing
+/// on a target, so the camera doesn't nudge after the main movement.
+const CURSOR_PREFILTER: f64 = 0.12;
+/// Camera motion below this (fraction of the visible window) comes to rest
+/// exactly: ≈0.01 px at 1440p, invisible, but it stops the endless sub-pixel
+/// creep that makes text shimmer.
+const REST_FRACTION: f64 = 4e-6;
+/// Smoothing of the zoom level the pan blend refers to (seconds).
+const LEVEL_SMOOTHING: f64 = 0.2;
 /// Fraction of the visible window an interaction's clicks may span.
 const GROUP_FILL: f64 = 0.7;
 
@@ -316,16 +326,21 @@ impl CameraPath {
             track.raw_at(t).map(|(p, _)| layout.source_to_canvas(p))
         };
 
-        let mut raw = center;
-        let mut vel = (0.0, 0.0);
+        // Cursor as seen by the camera: low-passed, always running so it's warm.
+        let start = cursor_at(0.0).unwrap_or(center);
+        let (mut cur_x, mut cur_y) = (Spring::at(start.x), Spring::at(start.y));
+        let mut fx = SmoothFollow::at(center.x);
+        let mut fy = SmoothFollow::at(center.y);
         let mut target = center;
         let mut active: Option<usize> = None;
-        let mut ref_level = 1.0f64;
-        let mut ref_vel = 0.0;
+        let mut ref_level = Spring::at(1.0);
 
         for i in 0..n {
             let t = i as f64 * dt;
             let (z, dom) = zoom_at(segments, t, settings);
+            let cursor = cursor_at(t).map(|p| {
+                Vec2::new(cur_x.step(p.x, CURSOR_PREFILTER, dt), cur_y.step(p.y, CURSOR_PREFILTER, dt))
+            });
             let c = match dom {
                 Some(si) => {
                     let seg = &segments[si];
@@ -338,13 +353,12 @@ impl CameraPath {
                             ZoomFocus::Manual { x, y } => layout.source_norm_to_canvas(Vec2::new(x, y)),
                             ZoomFocus::Auto => match seg.anchor {
                                 Some(a) => layout.source_norm_to_canvas(a),
-                                None => cursor_at(t).unwrap_or(center),
+                                None => cursor.unwrap_or(center),
                             },
                         };
                         target = clamp_center(target, level, target_bounds);
-                        if ref_level <= 1.0 + 1e-3 || frames.is_empty() {
-                            ref_level = level;
-                            ref_vel = 0.0;
+                        if ref_level.pos <= 1.0 + 1e-3 || frames.is_empty() {
+                            ref_level = Spring::at(level);
                         }
                     }
                     match seg.focus {
@@ -354,7 +368,7 @@ impl CameraPath {
                         ZoomFocus::Auto => {
                             let before_anchor = seg.anchor_time.is_some_and(|at| t < at);
                             if !before_anchor {
-                                if let Some(p) = cursor_at(t) {
+                                if let Some(p) = cursor {
                                     let half = 0.5 / level * settings.dead_zone;
                                     target.x = follow_axis(target.x, p.x, half);
                                     target.y = follow_axis(target.y, p.y, half);
@@ -364,23 +378,23 @@ impl CameraPath {
                     }
                     target = clamp_center(target, level, target_bounds);
 
-                    ref_level = smooth_damp(ref_level, level, &mut ref_vel, 0.2, dt).max(1.0 + 1e-6);
+                    let rl = ref_level.step(level, LEVEL_SMOOTHING, dt).max(1.0 + 1e-6);
                     // How far along the zoom we are; 0 at zoom 1, 1 at the segment level.
-                    let s = ((1.0 - 1.0 / z) / (1.0 - 1.0 / ref_level)).clamp(0.0, 1.0);
+                    let s = ((1.0 - 1.0 / z) / (1.0 - 1.0 / rl)).clamp(0.0, 1.0);
                     if entering && s < 0.02 {
-                        // Invisible at this zoom: snap instead of sweeping across the screen.
-                        raw = target;
-                        vel = (0.0, 0.0);
+                        // Invisible at this zoom: jump instead of sweeping across the screen.
+                        fx = SmoothFollow::at(target.x);
+                        fy = SmoothFollow::at(target.y);
                     } else {
-                        raw.x = smooth_damp(raw.x, target.x, &mut vel.0, settings.follow_smoothing, dt);
-                        raw.y = smooth_damp(raw.y, target.y, &mut vel.1, settings.follow_smoothing, dt);
+                        let eps = REST_FRACTION / level;
+                        fx.step(target.x, settings.follow_smoothing, dt, eps);
+                        fy.step(target.y, settings.follow_smoothing, dt, eps);
                     }
-                    center.lerp(raw, s)
+                    center.lerp(Vec2::new(fx.pos(), fy.pos()), s)
                 }
                 None => {
                     active = None;
-                    ref_level = 1.0;
-                    ref_vel = 0.0;
+                    ref_level = Spring::at(1.0);
                     center
                 }
             };
@@ -674,6 +688,69 @@ mod tests {
         }
         let c = CameraPath::compute(&segs, &tr, &layout(), &s, dur, 60.0);
         assert!(c.frames.iter().all(|f| f.zoom == 1.0));
+    }
+
+    /// Zoomed-in pan: cursor sweeps right at 3 s, back left at 7 s (abrupt
+    /// starts and stops, optional jitter), inside a 2× segment.
+    fn pan(rate: f64, jitter: f32) -> CameraPath {
+        let tr = track(
+            &[(0.0, 250.0, 540.0), (3.0, 250.0, 540.0), (3.6, 1650.0, 540.0), (7.0, 1650.0, 540.0), (7.6, 250.0, 540.0), (12.0, 250.0, 540.0)],
+            vec![],
+            jitter,
+        );
+        let seg = ZoomSegment {
+            id: "p".into(),
+            start: 0.5,
+            end: 11.5,
+            level: 2.0,
+            focus: ZoomFocus::Auto,
+            enabled: true,
+            auto: false,
+            anchor: Some(Vec2::new(250.0 / W as f64, 0.5)),
+            anchor_time: Some(1.0),
+        };
+        CameraPath::compute(&[seg], &tr, &layout(), &ZoomSettings::default(), 12.0, rate)
+    }
+
+    #[test]
+    fn pans_decelerate_smoothly_and_settle_to_rest() {
+        let rate = 120.0;
+        let path = pan(rate, 2.0);
+        let px = 2560.0 * 2.0; // canvas units -> output px at 1440p, 2× zoom
+        let xs: Vec<f64> = path.frames.iter().map(|f| f.x * px).collect();
+        for (t0, t1, dir) in [(3.0, 6.9, 1.0), (7.0, 10.6, -1.0)] {
+            let (i0, i1) = ((t0 * rate) as usize, (t1 * rate) as usize);
+            let v: Vec<f64> = (i0..i1).map(|i| xs[i + 1] - xs[i]).collect(); // px/frame
+            // Moves one way only: no bounce back, no oscillation while settling.
+            assert!(v.iter().all(|&d| d * dir >= -1e-9), "pan reversed (dir {dir})");
+            // No sudden stops or kicks: velocity changes gradually, everywhere.
+            let max_dv = v.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f64::max);
+            let peak = v.iter().fold(0.0f64, |m, d| m.max(d.abs()));
+            assert!(max_dv < peak * 0.06, "velocity step {max_dv} px/frame (peak {peak})");
+            // Comes to rest exactly (no endless sub-pixel creep) well before the next pan.
+            let last_moving = v.iter().rposition(|d| d.abs() > 0.0).unwrap();
+            let rest = t0 + last_moving as f64 / rate;
+            assert!(rest < t0 + 3.0, "still creeping at {rest}s (dir {dir})");
+            // And the final step into rest is invisible.
+            assert!(v[last_moving].abs() < 0.02, "arrival jump {} px", v[last_moving]);
+        }
+    }
+
+    #[test]
+    fn preview_and_export_rates_trace_the_same_path() {
+        // Clean cursor: jitter alternating at exactly 120 Hz would alias at 60 Hz.
+        let (a, b) = (pan(60.0, 0.0), pan(120.0, 0.0));
+        let max = (0..=1100)
+            .map(|i| i as f64 / 100.0)
+            .map(|t| {
+                let (p, q) = (a.sample(t), b.sample(t));
+                (p.x - q.x).abs().max((p.y - q.y).abs())
+            })
+            .fold(0.0, f64::max);
+        // Within 2 output px at 1440p, 2× (60 Hz keyframes are interpolated
+        // linearly, ≈ a·dt²/8 at peak acceleration); holding targets per step
+        // made the preview lead by a full frame (~60 px here).
+        assert!(max * 5120.0 < 2.0, "preview/export differ by {} px", max * 5120.0);
     }
 
     #[test]

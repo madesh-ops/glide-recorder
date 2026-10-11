@@ -54,7 +54,8 @@ iGPU, FFmpeg 9.0.2), not just compiled.
   ignored. Window capture tracks window movement.
 - **Camera engine**: click filtering, time grouping, fit-to-interaction zoom
   level, segment merging and minimum durations, eased zoom curves, a
-  dead-zone follow with a critically damped spring, zoom-toward-point
+  dead-zone follow on a low-passed cursor through a 6th-order critically
+  damped filter that comes to exact rest, zoom-toward-point
   interpolation, and bounds that keep content unstretched with no background
   at full zoom. Tests check jitter, continuity, bounds, and determinism.
 - **Editor**: live preview that matches the export (Rust-computed tracks,
